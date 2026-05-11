@@ -349,7 +349,8 @@ async def chat(request: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        raise HTTPException(status_code=500, detail=traceback.format_exc())
 
 
 class ReportRequest(BaseModel):
