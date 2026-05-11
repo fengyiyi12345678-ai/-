@@ -1,0 +1,167 @@
+# 股票研究报告：{{ company_name | default("N/A", true) }}
+
+报告日期：{{ report_date }}
+代码：{{ ticker }} ({{ market }})
+当前价格：{{ current_price_str }}
+DCF 公允价值（基准情景）：{{ fair_value_str }}
+初步评级：**{{ rating }}**
+
+> {{ disclaimer }}
+
+---
+
+## 1. 核心结论
+
+- 当前估值是否具备安全边际：**{{ safety_margin_text }}**
+- DCF 估值结果（基准）：每股 **{{ fair_value_str }}**
+- Bull/Base/Bear 三种情景：
+  - Bull：{{ scenarios.bull }}
+  - Base：{{ scenarios.base }}
+  - Bear：{{ scenarios.bear }}
+- 可比公司估值区间：{{ comparables_range_text }}
+- 初步投资评级：**{{ rating }}**
+
+---
+
+## 2. 公司商业模式
+
+{{ business_model | default("用户未提供公司商业模式描述。", true) }}
+
+---
+
+## 3. 最新财报表现（{{ latest_year }} 年）
+
+| 指标 | 数值 |
+|---|---|
+| 收入 | {{ history.revenue_str }} |
+| 毛利率 | {{ history.gross_margin_str }} |
+| 经营利润率 | {{ history.operating_margin_str }} |
+| 净利率 | {{ history.net_margin_str }} |
+| 经营现金流 | {{ history.operating_cash_flow_str }} |
+| 自由现金流 | {{ history.free_cash_flow_str }} |
+| 现金 | {{ history.cash_str }} |
+| 总负债 | {{ history.total_liabilities_str }} |
+| 总资产 | {{ history.total_assets_str }} |
+| 股东权益 | {{ history.shareholders_equity_str }} |
+
+{% if data_warnings %}
+> 数据提示：
+{% for w in data_warnings %}
+> - {{ w }}
+{% endfor %}
+{% endif %}
+
+---
+
+## 4. 收入结构
+
+{% if revenue_note %}
+{{ revenue_note }}
+{% else %}
+- 最大业务：{{ segment_highlights.largest_segment | default("N/A", true) }}
+- 增长最快的业务：{{ segment_highlights.fastest_growing | default("N/A", true) }}
+- 拖累增长的业务：{{ segment_highlights.slowest_growing | default("N/A", true) }}
+- 高毛利业务：{{ segment_highlights.highest_margin | default("N/A", true) }}
+{% endif %}
+
+---
+
+## 5. 利润率假设
+
+未来 {{ assumptions.forecast_years }} 年关键利润率假设：
+
+- 毛利率：{{ pct(assumptions.gross_margin) }}
+- 经营利润率：{{ pct(assumptions.operating_margin) }}
+- 税率：{{ pct(assumptions.tax_rate) }}
+
+逻辑说明：本工具默认按历史均值锚定利润率，用户可在前端手动调整。
+
+---
+
+## 6. DCF 估值
+
+| 关键假设 | 取值 |
+|---|---|
+| 预测年数 | {{ assumptions.forecast_years }} |
+| 收入增速序列 | {{ growth_series_str }} |
+| 经营利润率 | {{ pct(assumptions.operating_margin) }} |
+| 税率 | {{ pct(assumptions.tax_rate) }} |
+| Capex / 收入 | {{ pct(assumptions.capex_pct_revenue) }} |
+| 折旧 / 收入 | {{ pct(assumptions.depreciation_pct_revenue) }} |
+| NWC / 收入 | {{ pct(assumptions.nwc_pct_revenue) }} |
+| WACC | {{ pct(assumptions.wacc) }} |
+| 永续增长率 | {{ pct(assumptions.terminal_growth_rate) }} |
+| 净负债 | {{ money(assumptions.net_debt) }} |
+| 稀释股本 | {{ assumptions.diluted_shares }} 百万股 |
+| **DCF 每股公允价值** | **{{ fair_value_str }}** |
+
+---
+
+## 7. 敏感性分析
+
+估值结果对 WACC、永续增长率、收入增速、经营利润率高度敏感。
+详见 Excel 中 `Sensitivity_WACC_TerminalGrowth` 与 `Sensitivity_Growth_Margin` 两个 sheet。
+
+---
+
+## 8. 可比公司估值
+
+{% if comparables_note %}
+{{ comparables_note }}
+{% else %}
+- P/S 中位数：{{ medians.p_s }}
+- P/E 中位数：{{ medians.p_e }}
+- EV/Sales 中位数：{{ medians.ev_sales }}
+- EV/EBITDA 中位数：{{ medians.ev_ebitda }}
+
+目标公司相对估值区间（每股）：
+
+| 倍数 | 低位 | 中位 | 高位 |
+|---|---|---|---|
+| P/S | {{ comp_per_share.ps.low }} | {{ comp_per_share.ps.median }} | {{ comp_per_share.ps.high }} |
+| P/E | {{ comp_per_share.pe.low }} | {{ comp_per_share.pe.median }} | {{ comp_per_share.pe.high }} |
+| EV/Sales | {{ comp_per_share.evsales.low }} | {{ comp_per_share.evsales.median }} | {{ comp_per_share.evsales.high }} |
+| EV/EBITDA | {{ comp_per_share.evebitda.low }} | {{ comp_per_share.evebitda.median }} | {{ comp_per_share.evebitda.high }} |
+{% endif %}
+
+---
+
+## 9. 最大问题三项
+
+{% for item in top_issues %}
+- {{ item }}
+{% endfor %}
+
+---
+
+## 10. 风险提示
+
+- **数据源风险**：数据来自{{ data_source_label }}，可能存在缺失或口径差异。
+- **财务预测风险**：所有预测均基于线性增速、历史均值假设，未来实际业绩可能显著偏离。
+- **估值假设风险**：WACC、永续增长率、利润率小幅变化都会对每股价值产生显著影响。
+- **行业竞争风险**：未来竞争格局变化可能压缩利润率。
+- **宏观与利率风险**：利率上行将提高 WACC，并直接降低 DCF 估值。
+
+{% if missing_field_warnings %}
+**数据缺失提示：**
+{% for w in missing_field_warnings %}
+- {{ w }}
+{% endfor %}
+{% endif %}
+
+---
+
+## 11. 投资评级
+
+| 当前股价 | DCF 每股公允价值 | 隐含上行空间 | 评级 |
+|---|---|---|---|
+| {{ current_price_str }} | {{ fair_value_str }} | {{ upside_str }} | **{{ rating }}** |
+
+评级规则：
+- DCF 公允价值高于当前价格 30% 以上：买入
+- 高于当前价格 10%–30%：增持
+- 在 ±10% 以内：中性
+- 低于当前价格 10%–30%：减持
+- 低于当前价格 30% 以上：卖出
+
+> {{ disclaimer }}
