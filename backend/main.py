@@ -51,28 +51,24 @@ def _clean(val):
 
 
 def _get_api_key():
-    key = os.getenv("ANTHROPIC_API_KEY", "")
+    key = os.getenv("DEEPSEEK_API_KEY", "")
     if not key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
-    # Handle surrogateescape: when locale is C, Python decodes env vars with
-    # surrogateescape, so non-UTF-8 bytes become surrogate codepoints.
+        raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY not set")
     try:
         key = key.encode("utf-8", "surrogateescape").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
         pass
-    # API keys are always ASCII. Strip whitespace and any stray non-ASCII chars.
     key = "".join(c for c in key.strip() if ord(c) < 128)
     if not key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY contains only invalid characters")
+        raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY contains only invalid characters")
     return key
 
 
-CLAUDE_VERSION = "urllib-v3"
+CLAUDE_VERSION = "deepseek-v1"
 
 
 async def _call_claude(system: str, messages: list, max_tokens: int = 2048) -> str:
-    """Call Anthropic API via stdlib urllib.request. Bypasses httpx entirely to
-    avoid header-encoding issues on locale-C environments."""
+    """Call DeepSeek API (OpenAI-compatible) via stdlib urllib.request."""
     import json
     import urllib.request
     import urllib.error
@@ -80,22 +76,21 @@ async def _call_claude(system: str, messages: list, max_tokens: int = 2048) -> s
     import ssl
 
     api_key = _get_api_key()
+    full_messages = [{"role": "system", "content": system}] + messages
     payload = {
-        "model": "claude-sonnet-4-6",
+        "model": "deepseek-chat",
         "max_tokens": max_tokens,
-        "system": system,
-        "messages": messages,
+        "messages": full_messages,
     }
     body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
     def do_request():
         req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
+            "https://api.deepseek.com/v1/chat/completions",
             data=body_bytes,
             method="POST",
         )
-        req.add_header("x-api-key", api_key)
-        req.add_header("anthropic-version", "2023-06-01")
+        req.add_header("Authorization", f"Bearer {api_key}")
         req.add_header("content-type", "application/json; charset=utf-8")
         req.add_header("accept", "application/json")
         ctx = ssl.create_default_context()
@@ -115,10 +110,10 @@ async def _call_claude(system: str, messages: list, max_tokens: int = 2048) -> s
             msg = err.get("error", {}).get("message", body_text)
         except Exception:
             msg = body_text
-        raise HTTPException(status_code=status, detail=f"Claude API ({status}): {msg}")
+        raise HTTPException(status_code=status, detail=f"DeepSeek API ({status}): {msg}")
 
     data = json.loads(body_text)
-    return data["content"][0]["text"]
+    return data["choices"][0]["message"]["content"]
 
 
 @app.get("/api/version")
