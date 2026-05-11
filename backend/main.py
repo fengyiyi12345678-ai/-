@@ -14,6 +14,11 @@ load_dotenv()
 
 app = FastAPI(title="Equity Research Copilot API")
 
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
