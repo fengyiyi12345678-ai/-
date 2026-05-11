@@ -67,9 +67,18 @@ def _get_api_key():
     return key
 
 
+CLAUDE_VERSION = "urllib-v3"
+
+
 async def _call_claude(system: str, messages: list, max_tokens: int = 2048) -> str:
-    """Call Anthropic API directly via httpx with explicit UTF-8 encoding."""
+    """Call Anthropic API via stdlib urllib.request. Bypasses httpx entirely to
+    avoid header-encoding issues on locale-C environments."""
     import json
+    import urllib.request
+    import urllib.error
+    import asyncio
+    import ssl
+
     api_key = _get_api_key()
     payload = {
         "model": "claude-sonnet-4-6",
@@ -77,33 +86,44 @@ async def _call_claude(system: str, messages: list, max_tokens: int = 2048) -> s
         "system": system,
         "messages": messages,
     }
-    # Explicitly encode body as UTF-8 bytes — bypasses any locale issues
     body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    # Pass header values as already-encoded bytes so httpx doesn't try to
-    # ASCII-encode them itself.
-    headers = {
-        "x-api-key": api_key.encode("ascii"),
-        "anthropic-version": b"2023-06-01",
-        "content-type": b"application/json; charset=utf-8",
-        "accept": b"application/json",
-    }
-    # trust_env=False prevents httpx from reading proxy / cert env vars that
-    # may contain non-ASCII bytes (root cause of header encoding errors).
-    async with httpx.AsyncClient(timeout=90.0, trust_env=False) as client:
-        resp = await client.post(
+
+    def do_request():
+        req = urllib.request.Request(
             "https://api.anthropic.com/v1/messages",
-            content=body_bytes,
-            headers=headers,
+            data=body_bytes,
+            method="POST",
         )
-        if resp.status_code != 200:
-            try:
-                err = resp.json()
-                msg = err.get("error", {}).get("message", resp.text)
-            except Exception:
-                msg = resp.text
-            raise HTTPException(status_code=resp.status_code, detail=f"Claude API: {msg}")
-        data = resp.json()
-        return data["content"][0]["text"]
+        req.add_header("x-api-key", api_key)
+        req.add_header("anthropic-version", "2023-06-01")
+        req.add_header("content-type", "application/json; charset=utf-8")
+        req.add_header("accept", "application/json")
+        ctx = ssl.create_default_context()
+        try:
+            with urllib.request.urlopen(req, timeout=90, context=ctx) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    loop = asyncio.get_event_loop()
+    status, body = await loop.run_in_executor(None, do_request)
+
+    body_text = body.decode("utf-8", errors="replace")
+    if status != 200:
+        try:
+            err = json.loads(body_text)
+            msg = err.get("error", {}).get("message", body_text)
+        except Exception:
+            msg = body_text
+        raise HTTPException(status_code=status, detail=f"Claude API ({status}): {msg}")
+
+    data = json.loads(body_text)
+    return data["content"][0]["text"]
+
+
+@app.get("/api/version")
+async def version():
+    return {"claude_caller": CLAUDE_VERSION, "build": "2026-05-11"}
 
 
 @app.get("/api/stock/{ticker}")
