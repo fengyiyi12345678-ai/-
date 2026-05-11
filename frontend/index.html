@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Equity Research Copilot</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: '#0f172a',
+            card: '#1e293b',
+            border: '#334155',
+          }
+        }
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { background: #0f172a; color: #f1f5f9; font-family: 'Inter', system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    .metric-card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 12px 16px; }
+    .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+    .tab-inactive { border-bottom: 2px solid transparent; color: #94a3b8; }
+    .tab-inactive:hover { color: #cbd5e1; }
+    .prose-dark h1, .prose-dark h2, .prose-dark h3 { color: #f1f5f9; margin-top: 1.2em; margin-bottom: 0.4em; font-weight: 600; }
+    .prose-dark h1 { font-size: 1.4em; }
+    .prose-dark h2 { font-size: 1.15em; border-bottom: 1px solid #334155; padding-bottom: 4px; }
+    .prose-dark h3 { font-size: 1em; color: #93c5fd; }
+    .prose-dark p { margin: 0.5em 0; line-height: 1.6; color: #cbd5e1; }
+    .prose-dark ul, .prose-dark ol { margin: 0.4em 0 0.4em 1.2em; color: #cbd5e1; }
+    .prose-dark li { margin: 0.2em 0; }
+    .prose-dark table { border-collapse: collapse; width: 100%; margin: 0.8em 0; }
+    .prose-dark th { background: #1e3a5f; color: #93c5fd; padding: 6px 12px; text-align: left; font-size: 0.85em; }
+    .prose-dark td { padding: 6px 12px; border-bottom: 1px solid #334155; color: #cbd5e1; font-size: 0.9em; }
+    .prose-dark hr { border-color: #334155; margin: 1em 0; }
+    .prose-dark strong { color: #f1f5f9; }
+    .prose-dark code { background: #1e3a5f; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; color: #93c5fd; }
+    .chat-msg-user { background: #1e3a5f; border-radius: 12px 12px 2px 12px; }
+    .chat-msg-assistant { background: #1e293b; border-radius: 12px 12px 12px 2px; border: 1px solid #334155; }
+    .spinner { border: 2px solid #334155; border-top-color: #3b82f6; border-radius: 50%; width: 20px; height: 20px; animation: spin 0.7s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b82f6; animation: pulse 1.4s ease-in-out infinite; }
+    .pulse-dot:nth-child(2) { animation-delay: 0.2s; }
+    .pulse-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const API = '';  // same origin
+
+// ── Utility helpers ──────────────────────────────────────────────────────────
+const fmt = {
+  price: (v, currency = 'USD') => v == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v),
+  pct: (v, decimals = 1) => v == null ? '—' : `${(v * 100).toFixed(decimals)}%`,
+  pctRaw: (v, decimals = 1) => v == null ? '—' : `${v.toFixed(decimals)}%`,
+  cap: (v) => {
+    if (v == null) return '—';
+    if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
+    if (v >= 1e9)  return `$${(v / 1e9).toFixed(2)}B`;
+    if (v >= 1e6)  return `$${(v / 1e6).toFixed(2)}M`;
+    return `$${v.toFixed(0)}`;
+  },
+  num: (v, decimals = 2) => v == null ? '—' : v.toFixed(decimals),
+  int: (v) => v == null ? '—' : new Intl.NumberFormat('en-US').format(Math.round(v)),
+  date: (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  },
+};
+
+const color = {
+  pos: 'text-emerald-400',
+  neg: 'text-red-400',
+  neu: 'text-slate-400',
+  change: (v) => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-red-400',
+};
+
+const ratingColor = (key) => {
+  if (!key) return 'text-slate-400';
+  const k = key.toLowerCase();
+  if (k.includes('buy') || k === 'strong_buy') return 'text-emerald-400';
+  if (k.includes('sell')) return 'text-red-400';
+  return 'text-yellow-400';
+};
+
+// ── Spinner ──────────────────────────────────────────────────────────────────
+function Spinner({ size = 20 }) {
+  return <div className="spinner" style={{ width: size, height: size }} />;
+}
+
+function TypingDots() {
+  return (
+    <div className="flex gap-1 items-center h-5 px-1">
+      <div className="pulse-dot" /><div className="pulse-dot" /><div className="pulse-dot" />
+    </div>
+  );
+}
+
+// ── Chart component ──────────────────────────────────────────────────────────
+function PriceChart({ ticker }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  const [period, setPeriod] = useState('1y');
+  const [loading, setLoading] = useState(false);
+
+  const periods = ['1mo', '3mo', '6mo', '1y', '2y', '5y'];
+
+  useEffect(() => {
+    if (!ticker) return;
+    setLoading(true);
+    fetch(`${API}/api/stock/${ticker}/history?period=${period}`)
+      .then(r => r.json())
+      .then(data => {
+        const hist = data.history || [];
+        const labels = hist.map(h => h.date);
+        const prices = hist.map(h => h.close);
+
+        if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; }
+        if (!canvasRef.current) return;
+
+        const first = prices[0] || 0;
+        const last = prices[prices.length - 1] || 0;
+        const up = last >= first;
+        const gradient = canvasRef.current.getContext('2d').createLinearGradient(0, 0, 0, 300);
+        gradient.addColorStop(0, up ? 'rgba(52,211,153,0.3)' : 'rgba(248,113,113,0.3)');
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+        chartRef.current = new Chart(canvasRef.current, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [{
+              data: prices,
+              borderColor: up ? '#34d399' : '#f87171',
+              backgroundColor: gradient,
+              borderWidth: 1.5,
+              pointRadius: 0,
+              fill: true,
+              tension: 0.2,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                mode: 'index',
+                intersect: false,
+                backgroundColor: '#1e293b',
+                titleColor: '#94a3b8',
+                bodyColor: '#f1f5f9',
+                borderColor: '#334155',
+                borderWidth: 1,
+                callbacks: {
+                  label: ctx => ` $${ctx.parsed.y.toFixed(2)}`,
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: { color: '#64748b', maxTicksLimit: 8, font: { size: 11 } },
+                grid: { color: '#1e293b' },
+              },
+              y: {
+                position: 'right',
+                ticks: { color: '#64748b', font: { size: 11 }, callback: v => `$${v.toFixed(0)}` },
+                grid: { color: '#1e293b' },
+              }
+            },
+            interaction: { mode: 'index', intersect: false },
+          }
+        });
+      })
+      .finally(() => setLoading(false));
+  }, [ticker, period]);
+
+  useEffect(() => () => { if (chartRef.current) chartRef.current.destroy(); }, []);
+
+  return (
+    <div className="bg-card rounded-xl border border-slate-700 p-4">
+      <div className="flex justify-between items-center mb-3">
+        <span className="text-sm text-slate-400">Price History</span>
+        <div className="flex gap-1">
+          {periods.map(p => (
+            <button key={p} onClick={() => setPeriod(p)}
+              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${period === p ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'}`}>
+              {p.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="relative" style={{ height: 240 }}>
+        {loading && <div className="absolute inset-0 flex items-center justify-center"><Spinner /></div>}
+        <canvas ref={canvasRef} />
+      </div>
+    </div>
+  );
+}
+
+function FinancialsChart({ data, title, keys, colors }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+
+  useEffect(() => {
+    if (!data || !data.length || !canvasRef.current) return;
+    if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; }
+
+    const labels = data.map(d => d.period);
+    const datasets = keys.map((k, i) => ({
+      label: k.label,
+      data: data.map(d => {
+        const v = d[k.key];
+        return v != null ? v / 1e9 : null;
+      }),
+      backgroundColor: colors[i],
+      borderRadius: 4,
+      borderSkipped: false,
+    }));
+
+    chartRef.current = new Chart(canvasRef.current, {
+      type: 'bar',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            titleColor: '#94a3b8',
+            bodyColor: '#f1f5f9',
+            borderColor: '#334155',
+            borderWidth: 1,
+            callbacks: { label: ctx => ` ${ctx.dataset.label}: $${ctx.parsed.y != null ? ctx.parsed.y.toFixed(2) : 'N/A'}B` }
+          }
+        },
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
+          y: { ticks: { color: '#64748b', font: { size: 10 }, callback: v => `$${v}B` }, grid: { color: '#1e293b' } }
+        }
+      }
+    });
+  }, [data, keys, colors]);
+
+  useEffect(() => () => { if (chartRef.current) chartRef.current.destroy(); }, []);
+
+  return (
+    <div className="bg-card rounded-xl border border-slate-700 p-4">
+      <div className="text-sm text-slate-400 mb-3">{title}</div>
+      <div style={{ height: 180 }}><canvas ref={canvasRef} /></div>
+    </div>
+  );
+}
+
+// ── Metric grid ───────────────────────────────────────────────────────────────
+function MetricRow({ label, value, colorClass }) {
+  return (
+    <div className="flex justify-between items-center py-1.5 border-b border-slate-800 last:border-0">
+      <span className="text-xs text-slate-400">{label}</span>
+      <span className={`text-xs font-medium ${colorClass || 'text-slate-200'}`}>{value}</span>
+    </div>
+  );
+}
+
+function MetricSection({ title, children }) {
+  return (
+    <div className="metric-card">
+      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+// ── Stock Header ──────────────────────────────────────────────────────────────
+function StockHeader({ stock }) {
+  const chg = stock.change;
+  const chgPct = stock.changePercent;
+  const chgColor = color.change(chg);
+
+  const ratingLabel = stock.recommendationKey
+    ? stock.recommendationKey.replace('_', ' ').toUpperCase()
+    : null;
+
+  return (
+    <div className="bg-card rounded-xl border border-slate-700 p-5">
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <div className="flex items-center gap-3">
+            <div>
+              <h1 className="text-xl font-bold text-white leading-tight">{stock.name}</h1>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-sm font-semibold text-blue-400">{stock.ticker}</span>
+                <span className="text-xs text-slate-500">·</span>
+                <span className="text-xs text-slate-400">{stock.exchange}</span>
+                {stock.sector && <>
+                  <span className="text-xs text-slate-500">·</span>
+                  <span className="text-xs text-slate-400">{stock.sector}</span>
+                </>}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-3xl font-bold text-white">{fmt.price(stock.price, stock.currency)}</div>
+          <div className={`text-sm font-medium ${chgColor} mt-0.5`}>
+            {chg != null && chgPct != null
+              ? `${chg >= 0 ? '+' : ''}${fmt.price(chg, stock.currency)} (${chg >= 0 ? '+' : ''}${fmt.pctRaw(chgPct)})`
+              : '—'}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+        <div className="text-center">
+          <div className="text-xs text-slate-500">Market Cap</div>
+          <div className="text-sm font-semibold text-slate-200">{fmt.cap(stock.marketCap)}</div>
+        </div>
+        <div className="text-center">
+          <div className="text-xs text-slate-500">P/E (TTM)</div>
+          <div className="text-sm font-semibold text-slate-200">{fmt.num(stock.peRatio)}</div>
+        </div>
+        <div className="text-center">
+          <div className="text-xs text-slate-500">52W Range</div>
+          <div className="text-sm font-semibold text-slate-200">
+            {stock['52wLow'] && stock['52wHigh']
+              ? `${fmt.price(stock['52wLow'], stock.currency)} – ${fmt.price(stock['52wHigh'], stock.currency)}`
+              : '—'}
+          </div>
+        </div>
+        <div className="text-center">
+          <div className="text-xs text-slate-500">Analyst Rating</div>
+          <div className={`text-sm font-semibold ${ratingColor(stock.recommendationKey)}`}>
+            {ratingLabel || '—'}
+            {stock.targetMeanPrice && <span className="text-slate-400 text-xs ml-1">({fmt.price(stock.targetMeanPrice)})</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Key Metrics Sidebar ───────────────────────────────────────────────────────
+function KeyMetrics({ stock }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <MetricSection title="Valuation">
+        <MetricRow label="P/E (TTM)" value={fmt.num(stock.peRatio)} />
+        <MetricRow label="Forward P/E" value={fmt.num(stock.forwardPE)} />
+        <MetricRow label="PEG Ratio" value={fmt.num(stock.pegRatio)} />
+        <MetricRow label="P/B" value={fmt.num(stock.priceToBook)} />
+        <MetricRow label="P/S (TTM)" value={fmt.num(stock.priceToSales)} />
+        <MetricRow label="EV/EBITDA" value={fmt.num(stock.evToEbitda)} />
+      </MetricSection>
+
+      <MetricSection title="Growth">
+        <MetricRow label="Revenue Growth" value={fmt.pct(stock.revenueGrowth)} colorClass={color.change(stock.revenueGrowth)} />
+        <MetricRow label="Earnings Growth" value={fmt.pct(stock.earningsGrowth)} colorClass={color.change(stock.earningsGrowth)} />
+        <MetricRow label="EPS (TTM)" value={fmt.price(stock.eps, stock.currency)} />
+        <MetricRow label="Fwd EPS" value={fmt.price(stock.forwardEps, stock.currency)} />
+      </MetricSection>
+
+      <MetricSection title="Profitability">
+        <MetricRow label="Gross Margin" value={fmt.pct(stock.grossMargin)} colorClass={color.pos} />
+        <MetricRow label="Op. Margin" value={fmt.pct(stock.operatingMargin)} colorClass={color.change(stock.operatingMargin)} />
+        <MetricRow label="Net Margin" value={fmt.pct(stock.netMargin)} colorClass={color.change(stock.netMargin)} />
+        <MetricRow label="ROE" value={fmt.pct(stock.roe)} colorClass={color.change(stock.roe)} />
+        <MetricRow label="ROA" value={fmt.pct(stock.roa)} colorClass={color.change(stock.roa)} />
+      </MetricSection>
+
+      <MetricSection title="Financial Health">
+        <MetricRow label="Total Revenue" value={fmt.cap(stock.totalRevenue)} />
+        <MetricRow label="Free Cash Flow" value={fmt.cap(stock.freeCashflow)} colorClass={color.change(stock.freeCashflow)} />
+        <MetricRow label="Total Debt" value={fmt.cap(stock.totalDebt)} />
+        <MetricRow label="Total Cash" value={fmt.cap(stock.totalCash)} colorClass={color.pos} />
+        <MetricRow label="Debt / Equity" value={fmt.num(stock.debtToEquity != null ? stock.debtToEquity / 100 : null)} />
+        <MetricRow label="Current Ratio" value={fmt.num(stock.currentRatio)} />
+        <MetricRow label="Quick Ratio" value={fmt.num(stock.quickRatio)} />
+      </MetricSection>
+
+      <MetricSection title="Market Data">
+        <MetricRow label="Beta" value={fmt.num(stock.beta)} />
+        <MetricRow label="Div. Yield" value={fmt.pct(stock.dividendYield)} colorClass={stock.dividendYield ? color.pos : color.neu} />
+        <MetricRow label="Volume" value={fmt.int(stock.volume)} />
+        <MetricRow label="Avg Volume" value={fmt.int(stock.avgVolume)} />
+        <MetricRow label="50D Avg" value={fmt.price(stock['50dAvg'], stock.currency)} />
+        <MetricRow label="200D Avg" value={fmt.price(stock['200dAvg'], stock.currency)} />
+        <MetricRow label="Employees" value={fmt.int(stock.employees)} />
+      </MetricSection>
+    </div>
+  );
+}
+
+// ── Overview Tab ──────────────────────────────────────────────────────────────
+function OverviewTab({ stock }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <PriceChart ticker={stock.ticker} />
+      {stock.description && (
+        <div className="bg-card rounded-xl border border-slate-700 p-4">
+          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">About {stock.name}</div>
+          <p className="text-sm text-slate-300 leading-relaxed">{stock.description}</p>
+          {stock.website && (
+            <a href={stock.website} target="_blank" rel="noopener noreferrer"
+              className="text-xs text-blue-400 hover:text-blue-300 mt-2 inline-block">
+              {stock.website} ↗
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Financials Tab ────────────────────────────────────────────────────────────
+function FinancialsTab({ ticker }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [freq, setFreq] = useState('annual');
+  const [stmt, setStmt] = useState('incomeStatement');
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API}/api/stock/${ticker}/financials`)
+      .then(r => r.json())
+      .then(setData)
+      .finally(() => setLoading(false));
+  }, [ticker]);
+
+  if (loading) return <div className="flex justify-center py-16"><Spinner size={32} /></div>;
+  if (!data) return <div className="text-slate-500 text-center py-16">No financial data available</div>;
+
+  const records = (data[freq]?.[stmt] || []).slice(0, 4);
+  if (!records.length) return <div className="text-slate-500 text-center py-16">No data for this period</div>;
+
+  const periods = records.map(r => r.period);
+
+  // Important rows for each statement
+  const rowGroups = {
+    incomeStatement: [
+      { key: 'Total Revenue', label: 'Total Revenue' },
+      { key: 'Cost Of Revenue', label: 'Cost of Revenue' },
+      { key: 'Gross Profit', label: 'Gross Profit', bold: true },
+      { key: 'Operating Expense', label: 'Operating Expense' },
+      { key: 'Operating Income', label: 'Operating Income', bold: true },
+      { key: 'EBITDA', label: 'EBITDA' },
+      { key: 'Net Income', label: 'Net Income', bold: true },
+      { key: 'Basic EPS', label: 'Basic EPS' },
+      { key: 'Diluted EPS', label: 'Diluted EPS' },
+    ],
+    balanceSheet: [
+      { key: 'Total Assets', label: 'Total Assets', bold: true },
+      { key: 'Current Assets', label: 'Current Assets' },
+      { key: 'Cash And Cash Equivalents', label: 'Cash & Equivalents' },
+      { key: 'Total Liabilities Net Minority Interest', label: 'Total Liabilities', bold: true },
+      { key: 'Current Liabilities', label: 'Current Liabilities' },
+      { key: 'Total Debt', label: 'Total Debt' },
+      { key: 'Stockholders Equity', label: "Stockholders' Equity", bold: true },
+    ],
+    cashFlow: [
+      { key: 'Operating Cash Flow', label: 'Operating Cash Flow', bold: true },
+      { key: 'Capital Expenditure', label: 'Capital Expenditure' },
+      { key: 'Free Cash Flow', label: 'Free Cash Flow', bold: true },
+      { key: 'Investing Cash Flow', label: 'Investing Cash Flow' },
+      { key: 'Financing Cash Flow', label: 'Financing Cash Flow' },
+      { key: 'Changes In Cash', label: 'Net Change in Cash' },
+    ],
+  };
+
+  const rows = rowGroups[stmt] || [];
+
+  const getValue = (row_key) => records.map(r => r[row_key]);
+
+  // EPS keys don't need B formatting
+  const isEps = (key) => key.toLowerCase().includes('eps');
+
+  const formatCell = (val, key) => {
+    if (val == null) return <span className="text-slate-600">—</span>;
+    if (isEps(key)) return <span>{fmt.price(val)}</span>;
+    const v = val / 1e9;
+    const cls = val > 0 ? 'text-slate-200' : 'text-red-400';
+    return <span className={cls}>${Math.abs(v) >= 0.01 ? v.toFixed(2) : v.toFixed(4)}B</span>;
+  };
+
+  // Charts data
+  const chartData = records.slice().reverse();
+  const incomeChartKeys = [
+    { key: 'Total Revenue', label: 'Revenue' },
+    { key: 'Gross Profit', label: 'Gross Profit' },
+    { key: 'Net Income', label: 'Net Income' },
+  ];
+  const incomeColors = ['#3b82f6', '#34d399', '#a78bfa'];
+
+  return (
+    <div className="flex flex-col gap-4">
+      {stmt === 'incomeStatement' && (
+        <FinancialsChart
+          data={chartData}
+          title="Revenue, Gross Profit & Net Income (Billions)"
+          keys={incomeChartKeys}
+          colors={incomeColors}
+        />
+      )}
+
+      <div className="bg-card rounded-xl border border-slate-700 overflow-hidden">
+        <div className="flex items-center justify-between p-4 border-b border-slate-700 flex-wrap gap-2">
+          <div className="flex gap-1">
+            {['incomeStatement', 'balanceSheet', 'cashFlow'].map(s => (
+              <button key={s} onClick={() => setStmt(s)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${stmt === s ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
+                {s === 'incomeStatement' ? 'Income' : s === 'balanceSheet' ? 'Balance Sheet' : 'Cash Flow'}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1">
+            {['annual', 'quarterly'].map(f => (
+              <button key={f} onClick={() => setFreq(f)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${freq === f ? 'bg-slate-600 text-white' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-700">
+                <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 w-48">Metric</th>
+                {periods.map(p => (
+                  <th key={p} className="text-right px-4 py-3 text-xs font-medium text-slate-400">{p}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ key, label, bold }) => {
+                const vals = getValue(key);
+                const hasData = vals.some(v => v != null);
+                if (!hasData) return null;
+                return (
+                  <tr key={key} className="border-b border-slate-800 last:border-0 hover:bg-slate-800/40 transition-colors">
+                    <td className={`px-4 py-2.5 text-xs ${bold ? 'font-semibold text-slate-200' : 'text-slate-400'}`}>{label}</td>
+                    {vals.map((v, i) => (
+                      <td key={i} className={`px-4 py-2.5 text-right text-xs ${bold ? 'font-semibold' : ''}`}>
+                        {formatCell(v, key)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── News Tab ──────────────────────────────────────────────────────────────────
+function NewsTab({ ticker }) {
+  const [news, setNews] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API}/api/stock/${ticker}/news`)
+      .then(r => r.json())
+      .then(d => setNews(d.news || []))
+      .finally(() => setLoading(false));
+  }, [ticker]);
+
+  if (loading) return <div className="flex justify-center py-16"><Spinner size={32} /></div>;
+  if (!news.length) return <div className="text-slate-500 text-center py-16">No recent news found</div>;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {news.map((item, i) => (
+        <a key={i} href={item.link} target="_blank" rel="noopener noreferrer"
+          className="bg-card rounded-xl border border-slate-700 p-4 hover:border-slate-500 transition-colors flex gap-3">
+          {item.thumbnail && (
+            <img src={item.thumbnail} alt="" className="w-20 h-16 object-cover rounded-lg flex-shrink-0" onError={e => e.target.style.display = 'none'} />
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-slate-100 leading-snug line-clamp-2">{item.title}</div>
+            <div className="flex items-center gap-2 mt-1.5">
+              <span className="text-xs text-blue-400">{item.publisher}</span>
+              {item.publishTime && <span className="text-xs text-slate-500">{fmt.date(item.publishTime)}</span>}
+            </div>
+          </div>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+// ── AI Chat Tab ───────────────────────────────────────────────────────────────
+function AIChatTab({ ticker, stockContext }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [report, setReport] = useState('');
+  const [reportLoading, setReportLoading] = useState(false);
+  const [view, setView] = useState('chat'); // 'chat' | 'report'
+  const endRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    const newMsg = { role: 'user', content: text };
+    const updated = [...messages, newMsg];
+    setMessages(updated);
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: updated, ticker, stockContext }),
+      });
+      const data = await res.json();
+      if (data.response) {
+        setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+      } else if (data.detail) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ Error: ${data.detail}` }]);
+      }
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Network error. Please try again.' }]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  };
+
+  const generateReport = async () => {
+    setReportLoading(true);
+    setView('report');
+    setReport('');
+    try {
+      const res = await fetch(`${API}/api/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, stockContext }),
+      });
+      const data = await res.json();
+      setReport(data.report || data.detail || 'Report generation failed');
+    } catch (e) {
+      setReport('⚠️ Network error generating report.');
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const suggestions = [
+    `What are the key investment risks for ${ticker}?`,
+    `Is ${ticker} overvalued or undervalued?`,
+    `Summarize the competitive position of ${ticker}`,
+    `What is the bull case for ${ticker}?`,
+  ];
+
+  const renderMessage = (content) => {
+    const html = marked.parse(content);
+    return <div className="prose-dark text-sm" dangerouslySetInnerHTML={{ __html: html }} />;
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex gap-2">
+        <button onClick={() => setView('chat')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${view === 'chat' ? 'bg-blue-600 text-white' : 'bg-card border border-slate-700 text-slate-400 hover:text-white'}`}>
+          💬 Chat
+        </button>
+        <button onClick={generateReport}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${view === 'report' ? 'bg-purple-600 text-white' : 'bg-card border border-slate-700 text-slate-400 hover:text-white'}`}>
+          {reportLoading ? <span className="flex items-center gap-2"><Spinner size={14} /> Generating…</span> : '📄 Generate Research Report'}
+        </button>
+      </div>
+
+      {view === 'report' && (
+        <div className="bg-card rounded-xl border border-slate-700 p-5 min-h-64">
+          {reportLoading ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <Spinner size={32} />
+              <div className="text-sm text-slate-400">Generating research report for {ticker}…</div>
+            </div>
+          ) : (
+            <div className="prose-dark text-sm" dangerouslySetInnerHTML={{ __html: report ? marked.parse(report) : '' }} />
+          )}
+        </div>
+      )}
+
+      {view === 'chat' && (
+        <>
+          <div className="bg-card rounded-xl border border-slate-700 flex flex-col" style={{ minHeight: 400 }}>
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3" style={{ maxHeight: 480 }}>
+              {messages.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-full py-8 gap-4">
+                  <div className="text-4xl">📊</div>
+                  <div className="text-slate-400 text-sm text-center">
+                    Ask me anything about <span className="text-blue-400 font-medium">{ticker}</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-lg">
+                    {suggestions.map((s, i) => (
+                      <button key={i} onClick={() => { setInput(s); inputRef.current?.focus(); }}
+                        className="text-xs text-left text-slate-400 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg p-2.5 transition-colors">
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {messages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[88%] px-4 py-3 ${m.role === 'user' ? 'chat-msg-user text-slate-200' : 'chat-msg-assistant'}`}>
+                    {m.role === 'user'
+                      ? <span className="text-sm">{m.content}</span>
+                      : renderMessage(m.content)
+                    }
+                  </div>
+                </div>
+              ))}
+              {loading && (
+                <div className="flex justify-start">
+                  <div className="chat-msg-assistant px-4 py-3"><TypingDots /></div>
+                </div>
+              )}
+              <div ref={endRef} />
+            </div>
+
+            <div className="border-t border-slate-700 p-3 flex gap-2">
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+                placeholder={`Ask about ${ticker}…`}
+                className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+              />
+              <button onClick={send} disabled={loading || !input.trim()}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg text-sm font-medium transition-colors">
+                {loading ? <Spinner size={16} /> : 'Send'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Main Dashboard ────────────────────────────────────────────────────────────
+function StockDashboard({ stock }) {
+  const [tab, setTab] = useState('overview');
+  const tabs = [
+    { id: 'overview', label: '📈 Overview' },
+    { id: 'financials', label: '💰 Financials' },
+    { id: 'news', label: '📰 News' },
+    { id: 'ai', label: '🤖 AI Copilot' },
+  ];
+
+  return (
+    <div className="flex flex-col gap-4">
+      <StockHeader stock={stock} />
+      <div className="flex gap-4 items-start">
+        {/* Sidebar */}
+        <div className="w-64 flex-shrink-0 hidden lg:block">
+          <KeyMetrics stock={stock} />
+        </div>
+        {/* Main content */}
+        <div className="flex-1 min-w-0 flex flex-col gap-3">
+          {/* Tabs */}
+          <div className="flex border-b border-slate-700 gap-0">
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${tab === t.id ? 'tab-active' : 'tab-inactive'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {tab === 'overview'    && <OverviewTab stock={stock} />}
+          {tab === 'financials'  && <FinancialsTab ticker={stock.ticker} />}
+          {tab === 'news'        && <NewsTab ticker={stock.ticker} />}
+          {tab === 'ai'          && <AIChatTab ticker={stock.ticker} stockContext={stock} />}
+          {/* Mobile metrics */}
+          <div className="lg:hidden mt-2"><KeyMetrics stock={stock} /></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Search Box with live dropdown ─────────────────────────────────────────────
+function SearchBox({ onSelect, loading }) {
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [open, setOpen] = useState(false);
+  const timerRef = useRef(null);
+  const wrapRef = useRef(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const fetchSuggestions = (q) => {
+    if (!q || q.length < 1) { setSuggestions([]); setOpen(false); return; }
+    setSearching(true);
+    fetch(`${API}/api/search?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(d => {
+        setSuggestions(d.results || []);
+        setOpen(true);
+      })
+      .catch(() => setSuggestions([]))
+      .finally(() => setSearching(false));
+  };
+
+  const handleChange = (e) => {
+    const val = e.target.value;
+    setQuery(val);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => fetchSuggestions(val), 300);
+  };
+
+  const handleSelect = (item) => {
+    setQuery(item.ticker);
+    setSuggestions([]);
+    setOpen(false);
+    onSelect(item.ticker);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      setOpen(false);
+      onSelect(query.trim().toUpperCase());
+    }
+    if (e.key === 'Escape') setOpen(false);
+  };
+
+  const typeLabel = { EQUITY: 'Stock', ETF: 'ETF', MUTUALFUND: 'Fund', INDEX: 'Index', CRYPTOCURRENCY: 'Crypto' };
+
+  return (
+    <div ref={wrapRef} className="relative flex-1 max-w-xl">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <input
+            value={query}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onFocus={() => suggestions.length > 0 && setOpen(true)}
+            placeholder="搜索股票代码或公司名称 (e.g. Apple, 腾讯, TSLA)…"
+            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors pr-8"
+          />
+          {searching && (
+            <div className="absolute right-2 top-1/2 -translate-y-1/2"><Spinner size={14} /></div>
+          )}
+        </div>
+        <button
+          onClick={() => { setOpen(false); onSelect(query.trim().toUpperCase()); }}
+          disabled={loading || !query.trim()}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap">
+          {loading ? <Spinner size={16} /> : '搜索'}
+        </button>
+      </div>
+
+      {open && suggestions.length > 0 && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden">
+          {suggestions.map((item, i) => (
+            <button key={i} onClick={() => handleSelect(item)}
+              className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-slate-700 transition-colors text-left border-b border-slate-700 last:border-0">
+              <div>
+                <span className="text-sm font-semibold text-blue-400 mr-2">{item.ticker}</span>
+                <span className="text-sm text-slate-200">{item.name}</span>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {item.exchange && <span className="text-xs text-slate-500">{item.exchange}</span>}
+                {item.type && <span className="text-xs text-slate-600 bg-slate-700 px-1.5 py-0.5 rounded">{typeLabel[item.type] || item.type}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [stock, setStock] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [currentTicker, setCurrentTicker] = useState('');
+
+  const loadStock = async (ticker) => {
+    const t = ticker.trim().toUpperCase();
+    if (!t) return;
+    setLoading(true);
+    setError('');
+    setStock(null);
+    setCurrentTicker(t);
+    try {
+      const res = await fetch(`${API}/api/stock/${t}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.detail || `找不到 '${t}'，请检查代码是否正确`);
+      } else {
+        setStock(data);
+      }
+    } catch (e) {
+      setError('无法连接到服务器，请稍后重试。');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const quickPicks = [
+    { ticker: 'AAPL', label: '苹果' },
+    { ticker: 'MSFT', label: '微软' },
+    { ticker: 'NVDA', label: '英伟达' },
+    { ticker: 'GOOGL', label: '谷歌' },
+    { ticker: 'AMZN', label: '亚马逊' },
+    { ticker: 'TSLA', label: '特斯拉' },
+    { ticker: 'META', label: 'Meta' },
+    { ticker: '9988.HK', label: '阿里巴巴' },
+    { ticker: '0700.HK', label: '腾讯' },
+    { ticker: 'BABA', label: '阿里(US)' },
+  ];
+
+  return (
+    <div className="min-h-screen">
+      {/* Top nav */}
+      <header className="bg-slate-900 border-b border-slate-700 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+          <button
+            onClick={() => { setStock(null); setError(''); setCurrentTicker(''); }}
+            className="flex items-center gap-2 flex-shrink-0 hover:opacity-80 transition-opacity cursor-pointer"
+            title="返回主页">
+            <span className="text-xl">📊</span>
+            <span className="font-bold text-white text-lg hidden sm:block">股票研究助手</span>
+          </button>
+          <SearchBox onSelect={loadStock} loading={loading} />
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-6">
+        {/* Landing state */}
+        {!stock && !loading && !error && (
+          <div className="flex flex-col items-center justify-center py-20 gap-6">
+            <div className="text-6xl">📊</div>
+            <div className="text-center">
+              <h2 className="text-2xl font-bold text-white mb-2">股票研究 AI 助手</h2>
+              <p className="text-slate-400 text-sm max-w-md">
+                支持搜索股票代码或公司名称，获取财务数据、图表和 AI 分析报告
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {quickPicks.map(({ ticker, label }) => (
+                <button key={ticker} onClick={() => loadStock(ticker)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-sm font-medium text-slate-300 hover:text-white transition-colors">
+                  <span className="text-blue-400 font-semibold">{ticker}</span>
+                  <span className="text-slate-400 ml-1 text-xs">{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <Spinner size={40} />
+            <div className="text-slate-400 text-sm">正在加载 {currentTicker}…</div>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <div className="text-red-400 bg-red-900/20 border border-red-800 rounded-xl px-6 py-4 text-center max-w-md">
+              <div className="font-semibold mb-1">未找到</div>
+              <div className="text-sm">{error}</div>
+            </div>
+          </div>
+        )}
+
+        {stock && !loading && <StockDashboard stock={stock} />}
+      </main>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
