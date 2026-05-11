@@ -51,9 +51,19 @@ def _clean(val):
 
 
 def _get_api_key():
-    key = os.getenv("ANTHROPIC_API_KEY")
+    key = os.getenv("ANTHROPIC_API_KEY", "")
     if not key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
+    # Handle surrogateescape: when locale is C, Python decodes env vars with
+    # surrogateescape, so non-UTF-8 bytes become surrogate codepoints.
+    try:
+        key = key.encode("utf-8", "surrogateescape").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    # API keys are always ASCII. Strip whitespace and any stray non-ASCII chars.
+    key = "".join(c for c in key.strip() if ord(c) < 128)
+    if not key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY contains only invalid characters")
     return key
 
 
@@ -69,12 +79,17 @@ async def _call_claude(system: str, messages: list, max_tokens: int = 2048) -> s
     }
     # Explicitly encode body as UTF-8 bytes — bypasses any locale issues
     body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    # Pass header values as already-encoded bytes so httpx doesn't try to
+    # ASCII-encode them itself.
     headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json; charset=utf-8",
+        "x-api-key": api_key.encode("ascii"),
+        "anthropic-version": b"2023-06-01",
+        "content-type": b"application/json; charset=utf-8",
+        "accept": b"application/json",
     }
-    async with httpx.AsyncClient(timeout=90.0) as client:
+    # trust_env=False prevents httpx from reading proxy / cert env vars that
+    # may contain non-ASCII bytes (root cause of header encoding errors).
+    async with httpx.AsyncClient(timeout=90.0, trust_env=False) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             content=body_bytes,
