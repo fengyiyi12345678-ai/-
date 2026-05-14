@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.parquet
+data/raw/nowscore/
+data/output/test.*
+data/output/*.xlsx
+data/output/*.md
+!data/output/.gitkeep
